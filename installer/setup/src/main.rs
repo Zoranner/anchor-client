@@ -18,11 +18,10 @@ enum Command {
         config: PathBuf,
         #[arg(long)]
         database: PathBuf,
-        /// 本机审计用标识；省略时使用已有配置或自动生成。
         #[arg(long)]
-        device_id: Option<String>,
-        #[arg(long)]
-        verifying_key_hex: String,
+        server_address: String,
+        #[arg(long, default_value = "8080")]
+        server_port: String,
     },
 }
 
@@ -31,17 +30,14 @@ fn main() -> ExitCode {
         Command::WriteServiceConfig {
             config,
             database,
-            device_id,
-            verifying_key_hex,
-        } => {
-            match write_service_config(&config, &database, device_id.as_deref(), &verifying_key_hex)
-            {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => {
-                    eprintln!("错误: {error:#}");
-                    ExitCode::FAILURE
-                }
+            server_address,
+            server_port,
+        } => match write_service_config(&config, &database, &server_address, &server_port) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("错误: {error:#}");
+                ExitCode::FAILURE
             }
-        }
+        },
     }
 }

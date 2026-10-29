@@ -1,0 +1,95 @@
+<Include xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Fragment>
+    <UI>
+        <Dialog Id="AnchorServerDlg" Width="370" Height="270" Title="Anchor Guard">
+            <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
+                <Publish Event="SpawnDialog" Value="AnchorServerInvalidDlg" Order="1" Condition="NOT (ANCHOR_SERVER_ADDRESS AND ANCHOR_SERVER_PORT)" />
+            </Control>
+            <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)" />
+            <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+                <Publish Event="SpawnDialog" Value="CancelDlg" />
+            </Control>
+
+            <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="WixUI_Bmp_Banner" />
+            <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+            <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+            <Control Id="Title" Type="Text" X="15" Y="6" Width="330" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}服务器配置" />
+            <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="输入 Anchor Guard 服务端地址和端口。安装包不包含部署实例公钥。" />
+
+            <Control Id="AddressLabel" Type="Text" X="20" Y="65" Width="320" Height="15" NoPrefix="yes" Text="服务端地址（不含端口）" />
+            <Control Id="AddressEdit" Type="Edit" X="20" Y="80" Width="320" Height="18" Property="ANCHOR_SERVER_ADDRESS" Sunken="yes" />
+            <Control Id="PortLabel" Type="Text" X="20" Y="110" Width="120" Height="15" NoPrefix="yes" Text="端口" />
+            <Control Id="PortEdit" Type="Edit" X="20" Y="125" Width="80" Height="18" Property="ANCHOR_SERVER_PORT" Sunken="yes" />
+        </Dialog>
+
+        <Dialog Id="AnchorServerInvalidDlg" Width="260" Height="100" Title="Anchor Guard">
+            <Control Id="Message" Type="Text" X="15" Y="15" Width="230" Height="30" NoPrefix="yes" Text="请输入服务端地址和端口。" />
+            <Control Id="OK" Type="PushButton" X="102" Y="65" Width="56" Height="17" Default="yes" Text="!(loc.WixUIOK)">
+                <Publish Event="EndDialog" Value="Return" />
+            </Control>
+        </Dialog>
+    </UI>
+</Fragment>
+
+<?foreach WIXUIARCH in X86;X64;A64 ?>
+<Fragment xmlns="http://wixtoolset.org/schemas/v4/wxs">
+    <UI Id="AnchorGuardUI_$(WIXUIARCH)">
+        <Publish Dialog="BrowseDlg" Control="OK" Event="DoAction" Value="WixUIValidatePath_$(WIXUIARCH)" Order="3" Condition="NOT WIXUI_DONTVALIDATEPATH" />
+        <Publish Dialog="InstallDirDlg" Control="Next" Event="DoAction" Value="WixUIValidatePath_$(WIXUIARCH)" Order="2" Condition="NOT WIXUI_DONTVALIDATEPATH" />
+    </UI>
+
+    <UIRef Id="AnchorGuardUI" />
+</Fragment>
+<?endforeach?>
+
+<Fragment xmlns="http://wixtoolset.org/schemas/v4/wxs">
+    <UI Id="file AnchorGuardUI">
+        <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
+        <TextStyle Id="WixUI_Font_Bigger" FaceName="Tahoma" Size="12" />
+        <TextStyle Id="WixUI_Font_Title" FaceName="Tahoma" Size="9" Bold="yes" />
+
+        <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+
+        <DialogRef Id="BrowseDlg" />
+        <DialogRef Id="DiskCostDlg" />
+        <DialogRef Id="ErrorDlg" />
+        <DialogRef Id="FatalError" />
+        <DialogRef Id="FilesInUse" />
+        <DialogRef Id="MsiRMFilesInUse" />
+        <DialogRef Id="PrepareDlg" />
+        <DialogRef Id="ProgressDlg" />
+        <DialogRef Id="ResumeDlg" />
+        <DialogRef Id="UserExit" />
+
+        <Publish Dialog="BrowseDlg" Control="OK" Event="SpawnDialog" Value="InvalidDirDlg" Order="4" Condition="NOT WIXUI_DONTVALIDATEPATH AND WIXUI_INSTALLDIR_VALID&lt;&gt;&quot;1&quot;" />
+
+        <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
+
+        <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Condition="NOT Installed" />
+        <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
+
+        <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
+        <Publish Dialog="InstallDirDlg" Control="Next" Event="SetTargetPath" Value="[WIXUI_INSTALLDIR]" Order="1" />
+        <Publish Dialog="InstallDirDlg" Control="Next" Event="SpawnDialog" Value="InvalidDirDlg" Order="3" Condition="NOT WIXUI_DONTVALIDATEPATH AND WIXUI_INSTALLDIR_VALID&lt;&gt;&quot;1&quot;" />
+        <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="AnchorServerDlg" Order="4" Condition="WIXUI_DONTVALIDATEPATH OR WIXUI_INSTALLDIR_VALID=&quot;1&quot;" />
+        <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Property="_BrowseProperty" Value="[WIXUI_INSTALLDIR]" Order="1" />
+        <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Event="SpawnDialog" Value="BrowseDlg" Order="2" />
+
+        <Publish Dialog="AnchorServerDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" />
+        <Publish Dialog="AnchorServerDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="ANCHOR_SERVER_ADDRESS AND ANCHOR_SERVER_PORT" />
+
+        <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="AnchorServerDlg" Order="1" Condition="NOT Installed" />
+        <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition="Installed AND NOT PATCH" />
+        <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="Installed AND PATCH" />
+
+        <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
+        <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
+        <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
+        <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
+
+        <Property Id="ARPNOMODIFY" Value="1" />
+    </UI>
+
+    <UIRef Id="WixUI_Common" />
+</Fragment>
+</Include>

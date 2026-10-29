@@ -3,15 +3,13 @@ use std::fs;
 use anchor_setup::write_service_config;
 use tempfile::tempdir;
 
-const VERIFYING_KEY_HEX: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-
 #[test]
-fn writes_validated_service_config_without_leaving_a_temporary_file() {
+fn writes_server_url_without_leaving_a_temporary_file() {
     let directory = tempdir().unwrap();
     let config = directory.path().join("service.toml");
     let database = directory.path().join("audit.db");
 
-    write_service_config(&config, &database, Some("laptop-1"), VERIFYING_KEY_HEX).unwrap();
+    write_service_config(&config, &database, "anchor.example.com", "8443").unwrap();
 
     let configured: toml::Value = fs::read_to_string(&config).unwrap().parse().unwrap();
     assert_eq!(
@@ -19,11 +17,30 @@ fn writes_validated_service_config_without_leaving_a_temporary_file() {
         Some(database.to_str().unwrap())
     );
     assert_eq!(
-        configured["verifying_key_hex"].as_str(),
-        Some(VERIFYING_KEY_HEX)
+        configured["server_url"].as_str(),
+        Some("https://anchor.example.com:8443")
     );
-    assert_eq!(configured["device_id"].as_str(), Some("laptop-1"));
     assert!(!directory.path().join("service.toml.tmp").exists());
+}
+
+#[test]
+fn accepts_an_explicit_scheme_and_loopback_http() {
+    let directory = tempdir().unwrap();
+    let config = directory.path().join("service.toml");
+
+    write_service_config(
+        &config,
+        &directory.path().join("audit.db"),
+        "http://127.0.0.1",
+        "8080",
+    )
+    .unwrap();
+
+    let configured: toml::Value = fs::read_to_string(&config).unwrap().parse().unwrap();
+    assert_eq!(
+        configured["server_url"].as_str(),
+        Some("http://127.0.0.1:8080")
+    );
 }
 
 #[test]
@@ -35,12 +52,12 @@ fn rejects_invalid_input_without_replacing_existing_config() {
     let error = write_service_config(
         &config,
         &directory.path().join("audit.db"),
-        Some("laptop\n1"),
-        VERIFYING_KEY_HEX,
+        "https://anchor.example.com",
+        "70000",
     )
     .unwrap_err();
 
-    assert!(error.to_string().contains("device_id"));
+    assert!(error.to_string().contains("端口"));
     assert_eq!(
         fs::read_to_string(&config).unwrap(),
         "previous configuration\n"
@@ -48,19 +65,14 @@ fn rejects_invalid_input_without_replacing_existing_config() {
 }
 
 #[test]
-fn generates_a_local_device_id_when_none_is_provided() {
+fn rejects_plain_http_for_non_loopback_hosts() {
     let directory = tempdir().unwrap();
-    let config = directory.path().join("service.toml");
-    let database = directory.path().join("audit.db");
-
-    write_service_config(&config, &database, None, VERIFYING_KEY_HEX).unwrap();
-
-    let configured: toml::Value = fs::read_to_string(&config).unwrap().parse().unwrap();
-    let device_id = configured["device_id"].as_str().unwrap();
-    assert!(device_id.starts_with("device-"));
-
-    write_service_config(&config, &database, None, VERIFYING_KEY_HEX).unwrap();
-
-    let reconfigured: toml::Value = fs::read_to_string(&config).unwrap().parse().unwrap();
-    assert_eq!(reconfigured["device_id"].as_str(), Some(device_id));
+    let error = write_service_config(
+        &directory.path().join("service.toml"),
+        &directory.path().join("audit.db"),
+        "http://anchor.example.com",
+        "8080",
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("HTTPS"));
 }

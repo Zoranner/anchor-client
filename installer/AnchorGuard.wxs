@@ -1,23 +1,26 @@
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package
     Name="Anchor Guard"
     Manufacturer="Zoranner"
     Version="$(var.ProductVersion)"
     UpgradeCode="6E6CC77D-7F9C-4B27-856D-C6D0A84E7D9C"
     Language="1033"
+    Codepage="65001"
     Scope="perMachine">
     <MajorUpgrade DowngradeErrorMessage="A newer version of Anchor Guard is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <!-- 可选：本机审计标识；省略时由 anchor-setup 自动生成并在重装时沿用。 -->
-    <Property Id="ANCHOR_DEVICE_ID" Secure="yes" Hidden="yes" />
-    <Property Id="ANCHOR_VERIFYING_KEY_HEX" Secure="yes" Hidden="yes" />
-    <!-- 延迟自定义动作的输入串：Hidden 让安装日志不记录其中的验证公钥；该值由安装服务端
-         用 Secure 输入和目录属性拼成，不声明 Secure，客户端无法注入。 -->
+    <Property Id="ANCHOR_SERVER_ADDRESS" Secure="yes" />
+    <Property Id="ANCHOR_SERVER_PORT" Secure="yes" Value="8080" />
+    <!-- 延迟自定义动作的输入串；该值由安装服务端用 Secure 输入和目录属性拼成，
+         不声明 Secure，客户端无法注入。 -->
     <Property Id="WriteServiceConfig" Hidden="yes" />
     <Launch
-      Condition="Installed OR ANCHOR_VERIFYING_KEY_HEX"
-      Message="Use msiexec with ANCHOR_VERIFYING_KEY_HEX." />
+      Condition="Installed OR (ANCHOR_SERVER_ADDRESS AND ANCHOR_SERVER_PORT)"
+      Message="Server address and port are required." />
+
+    <ui:WixUI Id="AnchorGuardUI" InstallDirectory="AnchorInstallDirectory" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="AnchorInstallDirectory" Name="Anchor Guard">
@@ -97,7 +100,7 @@
     <CustomAction
       Id="SetServiceConfigData"
       Property="WriteServiceConfig"
-      Value="config=[AnchorDataDirectory]service.toml;database=[AnchorDataDirectory]audit.db;device_id=[ANCHOR_DEVICE_ID];verifying_key_hex=[ANCHOR_VERIFYING_KEY_HEX]" />
+      Value="config=[AnchorDataDirectory]service.toml;database=[AnchorDataDirectory]audit.db;server_address=[ANCHOR_SERVER_ADDRESS];server_port=[ANCHOR_SERVER_PORT]" />
     <CustomAction
       Id="WriteServiceConfig"
       FileRef="InstallerActionDll"
@@ -111,4 +114,5 @@
       <Custom Action="WriteServiceConfig" Before="StartServices" Condition="NOT Installed" />
     </InstallExecuteSequence>
   </Package>
+  <?include AnchorServerDlg.wxs?>
 </Wix>

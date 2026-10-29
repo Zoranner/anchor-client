@@ -4,28 +4,22 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use ed25519_dalek::VerifyingKey;
 use serde::Serialize;
-use uuid::Uuid;
 
 #[derive(Serialize)]
 struct ServiceConfig<'a> {
     database: &'a Path,
-    verifying_key_hex: &'a str,
-    device_id: &'a str,
+    server_url: &'a str,
 }
 
-/// 校验安装输入并原子写入服务配置，私钥不会经过该接口。
-///
-/// 未提供设备标识时沿用已有配置中的标识；首次安装也没有提供时生成一个本机标识。
+/// 校验安装输入并原子写入服务配置。
 pub fn write_service_config(
     config_path: &Path,
     database_path: &Path,
-    device_id: Option<&str>,
-    verifying_key_hex: &str,
+    server_address: &str,
+    server_port: &str,
 ) -> Result<()> {
-    validate_verifying_key(verifying_key_hex)?;
-    let device_id = resolve_device_id(config_path, device_id)?;
+    let server_url = build_server_url(server_address, server_port)?;
     let parent = config_path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -34,8 +28,7 @@ pub fn write_service_config(
 
     let content = toml::to_string(&ServiceConfig {
         database: database_path,
-        verifying_key_hex,
-        device_id: &device_id,
+        server_url: &server_url,
     })?;
     let temporary_path = config_path.with_extension(format!(
         "{}.tmp",
@@ -58,39 +51,55 @@ pub fn write_service_config(
     Ok(())
 }
 
-/// 设备标识优先使用显式输入，其次沿用已有配置，最后生成一个本机唯一标识。
-fn resolve_device_id(config_path: &Path, requested: Option<&str>) -> Result<String> {
-    if let Some(device_id) = requested.map(str::trim).filter(|value| !value.is_empty()) {
-        validate_device_id(device_id)?;
-        return Ok(device_id.to_string());
+fn build_server_url(server_address: &str, server_port: &str) -> Result<String> {
+    let address = server_address.trim();
+    if address.is_empty() || address.contains(['\r', '\n']) {
+        bail!("服务器地址不能为空且不得包含换行符");
     }
-    if let Some(existing) = existing_device_id(config_path) {
-        return Ok(existing);
+    let port = server_port
+        .trim()
+        .parse::<u16>()
+        .context("服务器端口必须是 1-65535 的数字")?;
+    if port == 0 {
+        bail!("服务器端口必须在 1-65535 之间");
     }
-    Ok(format!("device-{}", Uuid::new_v4()))
-}
 
-fn existing_device_id(config_path: &Path) -> Option<String> {
-    let content = fs::read_to_string(config_path).ok()?;
-    let parsed: toml::Value = toml::from_str(&content).ok()?;
-    let device_id = parsed.get("device_id")?.as_str()?.trim();
-    (!device_id.is_empty()).then(|| device_id.to_string())
-}
-
-fn validate_device_id(device_id: &str) -> Result<()> {
-    if device_id.trim().is_empty() || device_id.contains(['\r', '\n']) {
-        bail!("device_id 不能为空且不得包含换行符");
+    let candidate = if address.contains("://") {
+        address.to_owned()
+    } else {
+        format!("https://{address}")
+    };
+    let mut url = url::Url::parse(&candidate).context("服务器地址格式无效")?;
+    if url.scheme() != "https" && url.scheme() != "http" {
+        bail!("服务器地址必须使用 HTTPS");
     }
-    Ok(())
-}
+    if !url.username().is_empty() || url.password().is_some() {
+        bail!("服务器地址不能包含用户名或密码");
+    }
+    if url.port().is_some() {
+        bail!("服务器地址不要包含端口，请使用单独的端口输入");
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        bail!("服务器地址不能包含查询参数或片段");
+    }
+    if !matches!(url.path(), "" | "/") {
+        bail!("服务器地址不能包含路径");
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("服务器地址缺少主机名"))?;
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if url.scheme() == "http" && !loopback {
+        bail!("非回环服务器地址必须使用 HTTPS");
+    }
 
-fn validate_verifying_key(verifying_key_hex: &str) -> Result<()> {
-    let bytes = hex::decode(verifying_key_hex).context("管理员验证公钥不是十六进制")?;
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("管理员验证公钥必须是 32 字节"))?;
-    VerifyingKey::from_bytes(&bytes).context("管理员验证公钥无效")?;
-    Ok(())
+    url.set_port(Some(port))
+        .map_err(|_| anyhow::anyhow!("无法设置服务器端口"))?;
+    url.set_path("");
+    Ok(url.to_string().trim_end_matches('/').to_owned())
 }
 
 #[cfg(not(windows))]

@@ -14,16 +14,16 @@ const ENTRY_SEPARATOR: char = ';';
 
 const KEY_CONFIG: &str = "config";
 const KEY_DATABASE: &str = "database";
-const KEY_DEVICE_ID: &str = "device_id";
-const KEY_VERIFYING_KEY_HEX: &str = "verifying_key_hex";
+const KEY_SERVER_ADDRESS: &str = "server_address";
+const KEY_SERVER_PORT: &str = "server_port";
 
 /// 安装期传入的服务配置输入。
 #[derive(Debug, PartialEq, Eq)]
 pub struct ActionData<'a> {
     pub config_path: &'a str,
     pub database_path: &'a str,
-    pub device_id: Option<&'a str>,
-    pub verifying_key_hex: &'a str,
+    pub server_address: &'a str,
+    pub server_port: &'a str,
 }
 
 /// 解析安装输入数据串。
@@ -32,8 +32,8 @@ pub struct ActionData<'a> {
 pub fn parse_action_data(raw: &str) -> Result<ActionData<'_>> {
     let mut config_path = None;
     let mut database_path = None;
-    let mut device_id = None;
-    let mut verifying_key_hex = None;
+    let mut server_address = None;
+    let mut server_port = None;
 
     for entry in raw.split(ENTRY_SEPARATOR) {
         let entry = entry.trim();
@@ -46,10 +46,8 @@ pub fn parse_action_data(raw: &str) -> Result<ActionData<'_>> {
         match key.trim() {
             KEY_CONFIG => set_once(&mut config_path, value.trim(), KEY_CONFIG)?,
             KEY_DATABASE => set_once(&mut database_path, value.trim(), KEY_DATABASE)?,
-            KEY_DEVICE_ID => set_once(&mut device_id, value.trim(), KEY_DEVICE_ID)?,
-            KEY_VERIFYING_KEY_HEX => {
-                set_once(&mut verifying_key_hex, value.trim(), KEY_VERIFYING_KEY_HEX)?
-            }
+            KEY_SERVER_ADDRESS => set_once(&mut server_address, value.trim(), KEY_SERVER_ADDRESS)?,
+            KEY_SERVER_PORT => set_once(&mut server_port, value.trim(), KEY_SERVER_PORT)?,
             other => {
                 bail!("安装输入包含未知键，值中不能包含分隔符 {ENTRY_SEPARATOR}: {other}")
             }
@@ -59,19 +57,19 @@ pub fn parse_action_data(raw: &str) -> Result<ActionData<'_>> {
     Ok(ActionData {
         config_path: required(config_path, KEY_CONFIG)?,
         database_path: required(database_path, KEY_DATABASE)?,
-        device_id: device_id.filter(|value| !value.is_empty()),
-        verifying_key_hex: required(verifying_key_hex, KEY_VERIFYING_KEY_HEX)?,
+        server_address: required(server_address, KEY_SERVER_ADDRESS)?,
+        server_port: required(server_port, KEY_SERVER_PORT)?,
     })
 }
 
-/// 按安装输入写入服务配置；未提供设备标识时沿用已有配置或生成一个本机标识。
+/// 按安装输入写入服务配置。
 pub fn apply_action_data(raw: &str) -> Result<()> {
     let data = parse_action_data(raw)?;
     write_service_config(
         Path::new(data.config_path),
         Path::new(data.database_path),
-        data.device_id,
-        data.verifying_key_hex,
+        data.server_address,
+        data.server_port,
     )
 }
 
@@ -190,20 +188,17 @@ pub use installer::AnchorWriteServiceConfig;
 mod tests {
     use super::*;
 
-    const VERIFYING_KEY_HEX: &str =
-        "f0951b88b7646461aa6f989d70c323130ddc8f0d1650224650ec906579c0866a";
-
-    fn action_data(device_id: &str) -> String {
+    fn action_data(server_address: &str) -> String {
         format!(
             "config=C:\\ProgramData\\Anchor Guard\\service.toml;\
              database=C:\\ProgramData\\Anchor Guard\\audit.db;\
-             device_id={device_id};verifying_key_hex={VERIFYING_KEY_HEX}"
+             server_address={server_address};server_port=8080"
         )
     }
 
     #[test]
     fn parses_install_input() {
-        let raw = action_data("laptop-1");
+        let raw = action_data("anchor.example.com");
         let data = parse_action_data(&raw).unwrap();
         assert_eq!(
             data.config_path,
@@ -213,19 +208,13 @@ mod tests {
             data.database_path,
             "C:\\ProgramData\\Anchor Guard\\audit.db"
         );
-        assert_eq!(data.device_id, Some("laptop-1"));
-        assert_eq!(data.verifying_key_hex, VERIFYING_KEY_HEX);
-    }
-
-    #[test]
-    fn treats_empty_device_id_as_absent() {
-        let raw = action_data("");
-        assert_eq!(parse_action_data(&raw).unwrap().device_id, None);
+        assert_eq!(data.server_address, "anchor.example.com");
+        assert_eq!(data.server_port, "8080");
     }
 
     #[test]
     fn rejects_missing_required_entry() {
-        let raw = action_data("laptop-1")
+        let raw = action_data("anchor.example.com")
             .split(';')
             .filter(|entry| !entry.starts_with(KEY_DATABASE))
             .collect::<Vec<_>>()
@@ -236,19 +225,19 @@ mod tests {
 
     #[test]
     fn rejects_value_containing_separator() {
-        let error = parse_action_data(&action_data("lap;top")).unwrap_err();
+        let error = parse_action_data(&action_data("anchor;example.com")).unwrap_err();
         assert!(error.to_string().contains("分隔符"), "{error}");
     }
 
     #[test]
     fn rejects_unknown_and_duplicate_entry() {
-        let unknown =
-            parse_action_data(&format!("{};extra=1", action_data("laptop-1"))).unwrap_err();
+        let unknown = parse_action_data(&format!("{};extra=1", action_data("anchor.example.com")))
+            .unwrap_err();
         assert!(unknown.to_string().contains("未知键"), "{unknown}");
 
         let duplicate = parse_action_data(&format!(
             "{};config=D:\\other.toml",
-            action_data("laptop-1")
+            action_data("anchor.example.com")
         ))
         .unwrap_err();
         assert!(duplicate.to_string().contains("重复"), "{duplicate}");
@@ -260,7 +249,7 @@ mod tests {
         let config = directory.path().join("service.toml");
         let database = directory.path().join("audit.db");
         let raw = format!(
-            "config={};database={};device_id=;verifying_key_hex={VERIFYING_KEY_HEX}",
+            "config={};database={};server_address=anchor.example.com;server_port=8443",
             config.display(),
             database.display()
         );
@@ -268,7 +257,9 @@ mod tests {
         apply_action_data(&raw).unwrap();
 
         let content = std::fs::read_to_string(&config).unwrap();
-        assert!(content.contains(VERIFYING_KEY_HEX), "{content}");
-        assert!(content.contains("device-"), "{content}");
+        assert!(
+            content.contains("server_url = \"https://anchor.example.com:8443\""),
+            "{content}"
+        );
     }
 }
