@@ -7,6 +7,7 @@ pub mod nic;
 pub mod pipe;
 pub mod pnp;
 pub mod policy_media;
+pub mod secure_file;
 pub mod session;
 pub mod usb;
 pub mod write_denial;
