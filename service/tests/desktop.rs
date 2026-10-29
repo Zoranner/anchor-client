@@ -2,7 +2,7 @@ use anchor_core::{
     crypto, ActionPolicy, BurningRules, EventType, NetworkRules, PolicyPackage, PolicyPayload,
     ScanRules, UsbRules,
 };
-use anchor_ipc::{AuditFilter, ImportResponse};
+use anchor_ipc::{AuditFilter, ImportResponse, ServerStatusView, ServerSyncState};
 use anchor_service::Service;
 use anchor_store::Store;
 use chrono::{Duration, TimeZone, Utc};
@@ -125,4 +125,30 @@ fn audit_query_is_paged_and_read_only() {
         .events
         .last()
         .is_none_or(|last| event.sequence > last.sequence)));
+}
+
+#[test]
+fn desktop_status_exposes_server_sync_state() {
+    let service = Service::new(
+        Store::in_memory().unwrap(),
+        crypto::generate_keypair().1,
+        "laptop-1",
+    );
+    assert!(service.desktop_status(now()).unwrap().server.is_none());
+
+    *service
+        .server_status_handle()
+        .write()
+        .expect("server status lock") = Some(ServerStatusView {
+        state: ServerSyncState::Pending,
+        last_sync_at: Some(now()),
+        last_error: None,
+        policy_version: None,
+    });
+
+    let status = service.desktop_status(now()).unwrap();
+    assert_eq!(
+        status.server.map(|server| server.state),
+        Some(ServerSyncState::Pending)
+    );
 }

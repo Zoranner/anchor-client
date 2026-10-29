@@ -70,6 +70,29 @@ pub struct DesktopStatus {
     pub authorization: AuthorizationResponse,
     pub policy: Option<PolicySummary>,
     pub last_trusted_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<ServerStatusView>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerSyncState {
+    #[default]
+    Unknown,
+    Pending,
+    Active,
+    Rejected,
+    Disabled,
+    Unreachable,
+    Error,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerStatusView {
+    pub state: ServerSyncState,
+    pub last_sync_at: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+    pub policy_version: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -224,5 +247,32 @@ mod tests {
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("\"after_sequence\":42"));
         assert!(json.contains("\"limit\":100"));
+    }
+
+    #[test]
+    fn desktop_status_carries_server_sync_state() {
+        let status = DesktopStatus {
+            authorization: AuthorizationResponse::Allowed,
+            policy: None,
+            last_trusted_at: None,
+            server: Some(ServerStatusView {
+                state: ServerSyncState::Pending,
+                last_sync_at: None,
+                last_error: None,
+                policy_version: None,
+            }),
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("\"state\":\"pending\""));
+
+        let offline = DesktopStatus {
+            authorization: AuthorizationResponse::Allowed,
+            policy: None,
+            last_trusted_at: None,
+            server: None,
+        };
+        assert!(!serde_json::to_string(&offline)
+            .unwrap()
+            .contains("\"server\""));
     }
 }

@@ -48,6 +48,23 @@ export interface DesktopStatus {
   authorization: AuthorizationResponse;
   policy: PolicySummary | null;
   last_trusted_at: string | null;
+  server?: ServerStatusView | null;
+}
+
+export type ServerSyncState =
+  | "unknown"
+  | "pending"
+  | "active"
+  | "rejected"
+  | "disabled"
+  | "unreachable"
+  | "error";
+
+export interface ServerStatusView {
+  state: ServerSyncState;
+  last_sync_at: string | null;
+  last_error: string | null;
+  policy_version: number | null;
 }
 
 export interface PolicyInspection {

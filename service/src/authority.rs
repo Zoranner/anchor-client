@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::Path;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use anchor_core::{
     decide_import, evaluate_authorization, AuditPayload, AuthorizationDenial, AuthorizationState,
@@ -9,7 +9,7 @@ use anchor_core::{
 use anchor_ipc::{
     AuditFilter, AuditPage, AuditViewEvent, AuthorizationResponse, DesktopProtocolError,
     DesktopRequest, DesktopResponse, DesktopStatus, ImportResponse, PolicyInspection,
-    PolicySummary, ServiceRequest, ServiceResponse, MAX_POLICY_PACKAGE_BYTES,
+    PolicySummary, ServerStatusView, ServiceRequest, ServiceResponse, MAX_POLICY_PACKAGE_BYTES,
 };
 use anchor_store::{EventFilter, Store};
 use anchor_system::{
@@ -38,6 +38,7 @@ pub struct Service {
     pub(crate) store: Store,
     verifying_key: RwLock<Option<VerifyingKey>>,
     pub(crate) device_id: String,
+    server_status: Arc<RwLock<Option<ServerStatusView>>>,
 }
 
 impl Service {
@@ -54,6 +55,7 @@ impl Service {
             store,
             verifying_key: RwLock::new(verifying_key),
             device_id: device_id.into(),
+            server_status: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -69,6 +71,18 @@ impl Service {
             .verifying_key
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// 返回服务端同步状态的快照；离线模式没有配置服务端时返回 None。
+    pub fn server_status(&self) -> Option<ServerStatusView> {
+        self.server_status
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    pub fn server_status_handle(&self) -> Arc<RwLock<Option<ServerStatusView>>> {
+        Arc::clone(&self.server_status)
     }
 
     pub fn active_policy_version(&self) -> Result<Option<u64>, anchor_store::StoreError> {
@@ -138,6 +152,7 @@ impl Service {
             authorization: authorization_response(self.authorization_state(now)),
             policy,
             last_trusted_at,
+            server: self.server_status(),
         })
     }
 

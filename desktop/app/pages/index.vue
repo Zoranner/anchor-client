@@ -4,6 +4,7 @@ import PolicyDomainCard from "~/components/status/PolicyDomainCard.vue";
 import PolicyExceptionsDrawer from "~/components/status/PolicyExceptionsDrawer.vue";
 import StatusHero from "~/components/status/StatusHero.vue";
 import PolicyImportDialog from "~/components/import/PolicyImportDialog.vue";
+import ServerStateCard from "~/components/status/ServerStateCard.vue";
 import { policyDomainRows, type DomainRow } from "~/utils/policy";
 
 const policyStatus = usePolicyStatus();
@@ -65,6 +66,7 @@ function showExceptions(row: DomainRow) {
         :status="policyStatus.status.value"
         :stale="policyStatus.stale.value"
       />
+      <ServerStateCard :server="policyStatus.status.value.server" />
 
       <template v-if="policyStatus.status.value.policy">
         <section class="domain-grid">

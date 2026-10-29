@@ -1,11 +1,12 @@
 //! 服务端模式下的注册、审批轮询、心跳和策略同步。
 
 use std::{
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
 
 use anchor_core::{crypto, PolicyPackage, PolicyPayload};
+use anchor_ipc::{ServerStatusView, ServerSyncState};
 use anchor_protocol::{
     ApiErrorCode, DeviceStatus, HeartbeatRequest, PolicyEnvelope, RegisterDeviceRequest, ServerKey,
     ServerKeyStatus, ServerKeyringResponse,
@@ -35,6 +36,7 @@ pub struct ServerRuntime {
     identity: InstallationIdentity,
     token_store: DeviceTokenStore,
     inventory: Mutex<Option<InventoryRefresh>>,
+    status: Arc<RwLock<Option<ServerStatusView>>>,
 }
 
 struct InventoryRefresh {
@@ -48,6 +50,7 @@ impl ServerRuntime {
         server_url: impl Into<String>,
         identity: InstallationIdentity,
         device_token_path: std::path::PathBuf,
+        status: Arc<RwLock<Option<ServerStatusView>>>,
     ) -> Result<Self> {
         let sync = ServerSync::new(ServerSyncConfig::new(server_url)?);
         if let Some(trust) = service.store.server_trust()? {
@@ -56,12 +59,16 @@ impl ServerRuntime {
             validate_key_id(&trust.key_id, &key)?;
             service.set_verifying_key(key);
         }
+        *status
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(ServerStatusView::default());
         Ok(Self {
             service,
             sync,
             identity,
             token_store: DeviceTokenStore::new(device_token_path),
             inventory: Mutex::new(None),
+            status,
         })
     }
 
@@ -70,6 +77,15 @@ impl ServerRuntime {
     }
 
     pub fn sync_once(&self, now: DateTime<Utc>) -> Result<SyncReport> {
+        let result = self.sync_once_inner(now);
+        match &result {
+            Ok(report) => self.record_status_success(report, now),
+            Err(error) => self.record_status_error(error),
+        }
+        result
+    }
+
+    fn sync_once_inner(&self, now: DateTime<Utc>) -> Result<SyncReport> {
         let Some(token) = self.token_store.load()? else {
             return self.register(now);
         };
@@ -135,6 +151,50 @@ impl ServerRuntime {
             status: DeviceStatus::Active,
             policy_version: self.service.active_policy_version()?.or(current_version),
         })
+    }
+
+    fn record_status_success(&self, report: &SyncReport, now: DateTime<Utc>) {
+        let policy_version = report
+            .policy_version
+            .or_else(|| self.service.active_policy_version().ok().flatten());
+        self.write_status(ServerStatusView {
+            state: sync_state(report.status),
+            last_sync_at: Some(now),
+            last_error: None,
+            policy_version,
+        });
+    }
+
+    fn record_status_error(&self, error: &anyhow::Error) {
+        let previous = self.status_snapshot();
+        let policy_version = previous
+            .as_ref()
+            .and_then(|status| status.policy_version)
+            .or_else(|| self.service.active_policy_version().ok().flatten());
+        self.write_status(ServerStatusView {
+            state: if is_server_unreachable(error) {
+                ServerSyncState::Unreachable
+            } else {
+                ServerSyncState::Error
+            },
+            last_sync_at: previous.and_then(|status| status.last_sync_at),
+            last_error: Some(truncate_error(&format!("{error:#}"))),
+            policy_version,
+        });
+    }
+
+    fn status_snapshot(&self) -> Option<ServerStatusView> {
+        self.status
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn write_status(&self, status: ServerStatusView) {
+        *self
+            .status
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(status);
     }
 
     fn register(&self, _now: DateTime<Utc>) -> Result<SyncReport> {
@@ -285,6 +345,35 @@ fn is_inventory_changed(error: &ServerSyncError) -> bool {
     )
 }
 
+fn sync_state(status: DeviceStatus) -> ServerSyncState {
+    match status {
+        DeviceStatus::Pending => ServerSyncState::Pending,
+        DeviceStatus::Active => ServerSyncState::Active,
+        DeviceStatus::Rejected => ServerSyncState::Rejected,
+        DeviceStatus::Disabled => ServerSyncState::Disabled,
+    }
+}
+
+fn is_server_unreachable(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<ServerSyncError>(),
+            Some(ServerSyncError::Transport(_) | ServerSyncError::InvalidResponse(_))
+        )
+    })
+}
+
+fn truncate_error(message: &str) -> String {
+    const MAX_CHARS: usize = 500;
+    let mut chars = message.chars();
+    let truncated: String = chars.by_ref().take(MAX_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,5 +402,32 @@ mod tests {
         assert!(!is_inventory_changed(&token_invalid));
         assert!(is_inventory_changed(&inventory_changed));
         assert!(!is_token_invalid(&inventory_changed));
+    }
+
+    #[test]
+    fn status_mapping_matches_device_states() {
+        assert_eq!(sync_state(DeviceStatus::Pending), ServerSyncState::Pending);
+        assert_eq!(sync_state(DeviceStatus::Active), ServerSyncState::Active);
+        assert_eq!(
+            sync_state(DeviceStatus::Rejected),
+            ServerSyncState::Rejected
+        );
+        assert_eq!(
+            sync_state(DeviceStatus::Disabled),
+            ServerSyncState::Disabled
+        );
+    }
+
+    #[test]
+    fn transport_errors_are_unreachable_but_api_errors_are_not() {
+        let transport = anyhow::Error::new(ServerSyncError::Transport("offline".into()));
+        assert!(is_server_unreachable(&transport));
+
+        let api = anyhow::Error::new(ServerSyncError::Api {
+            status: 500,
+            code: ApiErrorCode::Internal,
+            message: "failed".into(),
+        });
+        assert!(!is_server_unreachable(&api));
     }
 }

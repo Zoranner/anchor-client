@@ -208,11 +208,13 @@ fn open_service(config: &ServiceConfig) -> Result<OpenedService> {
         initial_key,
         identity.as_string(),
     ));
+    let server_status = service.server_status_handle();
     let server_runtime = Arc::new(ServerRuntime::new(
         Arc::clone(&service),
         server_url,
         identity,
         config.device_token_path()?,
+        server_status,
     )?);
     Ok(OpenedService {
         service,
