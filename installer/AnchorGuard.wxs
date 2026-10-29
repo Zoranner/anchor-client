@@ -1,0 +1,114 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="Anchor Guard"
+    Manufacturer="Zoranner"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="6E6CC77D-7F9C-4B27-856D-C6D0A84E7D9C"
+    Language="1033"
+    Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Anchor Guard is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- 可选：本机审计标识；省略时由 anchor-setup 自动生成并在重装时沿用。 -->
+    <Property Id="ANCHOR_DEVICE_ID" Secure="yes" Hidden="yes" />
+    <Property Id="ANCHOR_VERIFYING_KEY_HEX" Secure="yes" Hidden="yes" />
+    <!-- 延迟自定义动作的输入串：Hidden 让安装日志不记录其中的验证公钥；该值由安装服务端
+         用 Secure 输入和目录属性拼成，不声明 Secure，客户端无法注入。 -->
+    <Property Id="WriteServiceConfig" Hidden="yes" />
+    <Launch
+      Condition="Installed OR ANCHOR_VERIFYING_KEY_HEX"
+      Message="Use msiexec with ANCHOR_VERIFYING_KEY_HEX." />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="AnchorInstallDirectory" Name="Anchor Guard">
+        <Component Id="ServiceExecutableComponent" Guid="B5754F50-9D9E-4C5D-A25C-E8DD734DA0D3">
+          <File Id="ServiceExecutable" Source="$(var.AnchorServiceBinary)" KeyPath="yes" />
+          <File Id="SessionExecutable" Source="$(var.AnchorSessionBinary)" />
+          <File Id="SetupExecutable" Source="$(var.AnchorSetupBinary)" />
+          <File Id="InstallerActionDll" Source="$(var.AnchorInstallerActionDll)" />
+          <!-- 不通过启动参数传配置路径：服务控制管理器传入的参数不受程序控制，
+               服务固定读取数据目录下的 service.toml。 -->
+          <ServiceInstall
+            Id="AnchorGuardService"
+            Name="AnchorGuard"
+            DisplayName="Anchor Guard"
+            Description="Applies local authorization policy and records endpoint audit events."
+            Start="auto"
+            Type="ownProcess"
+            ErrorControl="normal" />
+          <ServiceControl
+            Id="AnchorGuardServiceControl"
+            Name="AnchorGuard"
+            Start="install"
+            Stop="both"
+            Remove="uninstall"
+            Wait="yes" />
+        </Component>
+
+        <Component Id="DesktopComponent" Guid="A6C1C7D5-2E4B-4F0A-9B6D-7C3E8F1A2B4C">
+          <File Id="DesktopExecutable" Source="$(var.DesktopBinary)" KeyPath="yes">
+            <Shortcut
+              Id="AnchorGuardShortcut"
+              Directory="ProgramMenuFolder"
+              Name="Anchor Guard"
+              Arguments="--show"
+              Advertise="yes"
+              WorkingDirectory="AnchorInstallDirectory" />
+          </File>
+        </Component>
+
+        <Component Id="CredentialProviderComponent" Guid="7A9FF0AE-0504-4F25-AE69-6758B5170260">
+          <File Id="CredentialProviderDll" Source="$(var.AnchorCredentialDll)" KeyPath="yes" />
+          <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\CLSID\{7D56DFA0-7C16-4F0B-BB35-AD2E4A3B7021}\InprocServer32">
+            <RegistryValue Type="string" Value="[AnchorInstallDirectory]anchor_credential.dll" />
+            <RegistryValue Name="ThreadingModel" Type="string" Value="Apartment" />
+          </RegistryKey>
+          <RegistryKey Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{7D56DFA0-7C16-4F0B-BB35-AD2E4A3B7021}">
+            <RegistryValue Type="string" Value="Anchor Guard policy import" />
+          </RegistryKey>
+          <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\CLSID\{B4D4951B-D540-4421-A90C-19E1BBABAFB8}\InprocServer32">
+            <RegistryValue Type="string" Value="[AnchorInstallDirectory]anchor_credential.dll" />
+            <RegistryValue Name="ThreadingModel" Type="string" Value="Apartment" />
+          </RegistryKey>
+          <RegistryKey Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Provider Filters\{B4D4951B-D540-4421-A90C-19E1BBABAFB8}">
+            <RegistryValue Type="string" Value="Anchor Guard logon filter" />
+          </RegistryKey>
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="AnchorDataDirectory" Name="Anchor Guard">
+        <Component Id="AnchorDataDirectoryComponent" Guid="7DCB7737-5DF0-4C0A-8F41-E0C9BB1DB1E6">
+          <CreateFolder />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="AnchorGuardFeature" Title="Anchor Guard" Level="1">
+      <ComponentRef Id="ServiceExecutableComponent" />
+      <ComponentRef Id="DesktopComponent" />
+      <ComponentRef Id="CredentialProviderComponent" />
+      <ComponentRef Id="AnchorDataDirectoryComponent" />
+    </Feature>
+
+    <!-- 脚本执行期只能读取 CustomActionData，因此安装输入合并成一个以分号分隔的键值串；
+         值按原样传递，不做转义，即路径和标识中不得出现分号。 -->
+    <CustomAction
+      Id="SetServiceConfigData"
+      Property="WriteServiceConfig"
+      Value="config=[AnchorDataDirectory]service.toml;database=[AnchorDataDirectory]audit.db;device_id=[ANCHOR_DEVICE_ID];verifying_key_hex=[ANCHOR_VERIFYING_KEY_HEX]" />
+    <CustomAction
+      Id="WriteServiceConfig"
+      FileRef="InstallerActionDll"
+      DllEntry="AnchorWriteServiceConfig"
+      Execute="deferred"
+      Impersonate="no"
+      Return="check" />
+
+    <InstallExecuteSequence>
+      <Custom Action="SetServiceConfigData" Before="WriteServiceConfig" Condition="NOT Installed" />
+      <Custom Action="WriteServiceConfig" Before="StartServices" Condition="NOT Installed" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

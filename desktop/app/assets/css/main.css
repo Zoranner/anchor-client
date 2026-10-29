@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+:root {
+  --pr-titlebar-height: 44px;
+  --st-overlay-inset: calc(var(--pr-titlebar-height) + 1px) 1px
+    calc(var(--pr-statusbar-height) + 1px) 1px;
+  --pr-statusbar-height: var(--height-status);
+  --pr-dashboard-padding: var(--spacing-lg);
+  --pr-monochrome-icon-filter: brightness(0) invert(1);
+}
+
+html.light {
+  --pr-monochrome-icon-filter: brightness(0);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#__nuxt,
+#app {
+  width: 100%;
+  height: 100dvh;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  color: var(--st-text-primary);
+  background: var(--st-bg-base);
+  font-family: var(--font-family-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

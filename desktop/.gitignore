@@ -1,0 +1,10 @@
+/node_modules/
+/.nuxt/
+/.output/
+/dist/
+/.env
+/.env.local
+/src-tauri/gen/
+/src-tauri/target/
+/src-tauri/tools/*
+!/src-tauri/tools/.gitkeep

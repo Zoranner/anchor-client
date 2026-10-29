@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Anchor Guard",
+  "version": "0.1.2",
+  "identifier": "ink.zoran.anchor-guard",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "devUrl": "http://localhost:18082",
+    "beforeBuildCommand": "bun run generate",
+    "frontendDist": "../.output/public"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Anchor Guard",
+        "width": 960,
+        "height": 680,
+        "minWidth": 800,
+        "minHeight": 560,
+        "resizable": true,
+        "decorations": false,
+        "shadow": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null,
+      "capabilities": ["default"]
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "msi",
+    "publisher": "Zoranner",
+    "icon": ["icons/icon.ico", "icons/icon.png"]
+  }
+}

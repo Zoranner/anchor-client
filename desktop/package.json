@@ -1,0 +1,41 @@
+{
+  "name": "anchor-guard",
+  "private": true,
+  "version": "0.1.2",
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "typecheck": "nuxt typecheck",
+    "lint": "eslint .",
+    "format:check": "prettier --check app tests eslint.config.mjs nuxt.config.ts package.json prettier.config.mjs",
+    "test": "bun test",
+    "tauri": "tauri"
+  },
+  "overrides": {
+    "nuxt": "4.5.2",
+    "@nuxt/cli": "3.37.0",
+    "vite": "8.2.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@nuxt/icon": "^2.5.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "~2.11.0",
+    "eslint": "^10.9.1",
+    "eslint-plugin-vue": "^10.10.0",
+    "nuxt": "^4.0.0",
+    "prettier": "^3.9.6",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.0.0",
+    "typescript-eslint": "^8.68.0",
+    "vue-tsc": "^3.3.9"
+  },
+  "dependencies": {
+    "@iconify-json/ph": "^1.2.2",
+    "@stellar/ui": "0.3.4",
+    "@tauri-apps/api": "~2.11.0",
+    "@tauri-apps/plugin-dialog": "~2.4.0"
+  }
+}
