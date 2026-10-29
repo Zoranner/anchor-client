@@ -4,7 +4,9 @@ mod error;
 mod types;
 
 pub use error::StoreError;
-pub use types::{ActivePolicyRecord, DeviceStateRecord, EventFilter, ScanRecord, ScanStatus};
+pub use types::{
+    ActivePolicyRecord, DeviceStateRecord, EventFilter, ScanRecord, ScanStatus, ServerTrust,
+};
 
 use std::path::Path;
 use std::sync::{
@@ -20,6 +22,8 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 
 const ENFORCEMENT_FAILURE_KEY: &str = "enforcement_failure";
 const AUTHORIZATION_DENIAL_KEY: &str = "authorization_denial";
+const SERVER_KEY_ID: &str = "server_key_id";
+const SERVER_PUBLIC_KEY_HEX: &str = "server_public_key_hex";
 
 /// 本机 SQLite 存储。所有写入经由单个连接串行化，以维持审计链顺序。
 pub struct Store {
@@ -249,6 +253,60 @@ impl Store {
                     .map_err(|_| StoreError::TimeParse(timestamp))
             })
             .transpose()
+    }
+
+    /// 保存最近一次服务端密钥环中选定的验证密钥。
+    pub fn set_server_trust(
+        &self,
+        trust: &ServerTrust,
+        now: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::LockPoisoned)?;
+        let transaction = connection.transaction()?;
+        Self::set_runtime_in(&transaction, SERVER_KEY_ID, &trust.key_id, now)?;
+        Self::set_runtime_in(
+            &transaction,
+            SERVER_PUBLIC_KEY_HEX,
+            &trust.public_key_hex,
+            now,
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 读取已保存的服务端验证密钥。
+    pub fn server_trust(&self) -> Result<Option<ServerTrust>, StoreError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::LockPoisoned)?;
+        let key_id = connection
+            .query_row(
+                "SELECT value FROM runtime_state WHERE key = ?1",
+                params![SERVER_KEY_ID],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let public_key_hex = connection
+            .query_row(
+                "SELECT value FROM runtime_state WHERE key = ?1",
+                params![SERVER_PUBLIC_KEY_HEX],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        match (key_id, public_key_hex) {
+            (Some(key_id), Some(public_key_hex)) => Ok(Some(ServerTrust {
+                key_id,
+                public_key_hex,
+            })),
+            (None, None) => Ok(None),
+            _ => Err(StoreError::InvalidServerTrust(
+                "key id and public key must be stored together".into(),
+            )),
+        }
     }
 
     /// 单调记录最近一次授权成功时的可信时间，绝不以更早时间覆盖既有记录。
@@ -1203,6 +1261,31 @@ mod tests {
 
         store.clear_enforcement_failure().unwrap();
         assert_eq!(store.enforcement_failure().unwrap(), None);
+    }
+
+    #[test]
+    fn server_trust_round_trips_and_detects_partial_state() {
+        let store = Store::in_memory().unwrap();
+        let trust = ServerTrust {
+            key_id: "a".repeat(64),
+            public_key_hex: "b".repeat(64),
+        };
+        store.set_server_trust(&trust, now()).unwrap();
+        assert_eq!(store.server_trust().unwrap(), Some(trust));
+
+        store
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "DELETE FROM runtime_state WHERE key = ?1",
+                params![SERVER_PUBLIC_KEY_HEX],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.server_trust(),
+            Err(StoreError::InvalidServerTrust(_))
+        ));
     }
 
     #[test]

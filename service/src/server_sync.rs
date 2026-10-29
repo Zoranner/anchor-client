@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use anchor_protocol::{
-    ApiError, DeviceStatusResponse, HeartbeatRequest, RegisterDeviceRequest,
-    RegisterDeviceResponse, PROTOCOL_VERSION,
+    ApiError, DeviceStatusResponse, HeartbeatRequest, PolicyEnvelope, RegisterDeviceRequest,
+    RegisterDeviceResponse, ServerKeyringResponse, PROTOCOL_VERSION,
 };
 use anyhow::{bail, Context, Result};
 use serde::de::DeserializeOwned;
@@ -129,6 +129,44 @@ impl ServerSync {
             return Err(api_error(status, &body));
         }
         Ok(())
+    }
+
+    pub fn keyring(
+        &self,
+        device_token: &str,
+    ) -> std::result::Result<ServerKeyringResponse, ServerSyncError> {
+        let response = self
+            .agent
+            .get(&self.endpoint("/api/device/keyring"))
+            .header("X-Anchor-Protocol", &PROTOCOL_VERSION.to_string())
+            .header("Authorization", &format!("Bearer {device_token}"))
+            .call()
+            .map_err(transport_error)?;
+        parse_json_response(response)
+    }
+
+    pub fn fetch_policy(
+        &self,
+        device_token: &str,
+    ) -> std::result::Result<Option<PolicyEnvelope>, ServerSyncError> {
+        let response = self
+            .agent
+            .get(&self.endpoint("/api/device/policy"))
+            .header("X-Anchor-Protocol", &PROTOCOL_VERSION.to_string())
+            .header("Authorization", &format!("Bearer {device_token}"))
+            .call()
+            .map_err(transport_error)?;
+        let status = response.status().as_u16();
+        let body = read_body(response)?;
+        if status == 204 {
+            return Ok(None);
+        }
+        if !(200..=299).contains(&status) {
+            return Err(api_error(status, &body));
+        }
+        serde_json::from_str(&body)
+            .map(Some)
+            .map_err(|error| ServerSyncError::InvalidResponse(format!("JSON 解析失败: {error}")))
     }
 
     fn endpoint(&self, path: &str) -> String {
@@ -390,6 +428,7 @@ mod tests {
             &HeartbeatRequest {
                 client_version: "0.1.2".into(),
                 inventory_hash: "abc".into(),
+                inventory: None,
             },
         )
         .unwrap();
@@ -419,5 +458,40 @@ mod tests {
             ),
             "{debug}"
         );
+    }
+
+    #[test]
+    fn keyring_and_policy_responses_are_parsed() {
+        let server = OneShotServer::start(
+            "200 OK",
+            r#"{"keys":[{"key_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","public_key_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","status":"active"}]}"#,
+            |_| {},
+        );
+        let sync = ServerSync::new(config(&server));
+        let keyring = sync.keyring("token").unwrap();
+        server.join();
+        assert_eq!(
+            keyring.keys[0].status,
+            anchor_protocol::ServerKeyStatus::Active
+        );
+
+        let server = OneShotServer::start(
+            "200 OK",
+            r#"{"version":3,"expires_at":"2026-12-31T15:59:59Z","policy_json":{"version":3},"signature_hex":"cc","server_key_id":"key-1"}"#,
+            |_| {},
+        );
+        let sync = ServerSync::new(config(&server));
+        let policy = sync.fetch_policy("token").unwrap().unwrap();
+        server.join();
+        assert_eq!(policy.version, 3);
+        assert_eq!(policy.server_key_id, "key-1");
+    }
+
+    #[test]
+    fn no_policy_returns_none_for_204() {
+        let server = OneShotServer::start("204 No Content", "", |_| {});
+        let sync = ServerSync::new(config(&server));
+        assert_eq!(sync.fetch_policy("token").unwrap(), None);
+        server.join();
     }
 }

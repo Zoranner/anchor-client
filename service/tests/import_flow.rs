@@ -66,6 +66,27 @@ fn valid_package_in_a_policy_media_root_restores_authorization() {
 }
 
 #[test]
+fn policy_import_waits_for_a_trusted_server_key() {
+    let (signing_key, verifying_key) = crypto::generate_keypair();
+    let service = Service::with_optional_key(Store::in_memory().unwrap(), None, "laptop-1");
+    let package_json = serde_json::to_string(&package(1, &signing_key)).unwrap();
+
+    let denied = service
+        .import_policy_json(&package_json, "AnchorGuard", now())
+        .unwrap();
+    assert!(!denied.accepted);
+    assert_eq!(denied.reason, "verifying_key_unavailable");
+    assert_eq!(service.active_policy_version().unwrap(), None);
+
+    service.set_verifying_key(verifying_key);
+    let accepted = service
+        .import_policy_json(&package_json, "AnchorGuard", now())
+        .unwrap();
+    assert!(accepted.accepted, "{}", accepted.reason);
+    assert_eq!(service.active_policy_version().unwrap(), Some(1));
+}
+
+#[test]
 fn authorization_remembers_the_latest_trusted_time_for_rollback_detection() {
     let root = tempdir().unwrap();
     let (signing_key, verifying_key) = crypto::generate_keypair();

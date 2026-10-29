@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::sync::RwLock;
 
 use anchor_core::{
     decide_import, evaluate_authorization, AuditPayload, AuthorizationDenial, AuthorizationState,
@@ -35,17 +36,46 @@ pub struct ImportOutcome {
 /// 本地授权的唯一组织者。
 pub struct Service {
     pub(crate) store: Store,
-    verifying_key: VerifyingKey,
+    verifying_key: RwLock<Option<VerifyingKey>>,
     pub(crate) device_id: String,
 }
 
 impl Service {
     pub fn new(store: Store, verifying_key: VerifyingKey, device_id: impl Into<String>) -> Self {
+        Self::with_optional_key(store, Some(verifying_key), device_id)
+    }
+
+    pub fn with_optional_key(
+        store: Store,
+        verifying_key: Option<VerifyingKey>,
+        device_id: impl Into<String>,
+    ) -> Self {
         Self {
             store,
-            verifying_key,
+            verifying_key: RwLock::new(verifying_key),
             device_id: device_id.into(),
         }
+    }
+
+    pub fn set_verifying_key(&self, verifying_key: VerifyingKey) {
+        *self
+            .verifying_key
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(verifying_key);
+    }
+
+    pub fn verifying_key(&self) -> Option<VerifyingKey> {
+        *self
+            .verifying_key
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub fn active_policy_version(&self) -> Result<Option<u64>, anchor_store::StoreError> {
+        Ok(self
+            .store
+            .active_policy()?
+            .map(|package| package.payload.version))
     }
 
     /// 返回 Windows 登录和设备执行共用的当前授权结论。
@@ -140,7 +170,18 @@ impl Service {
             }
         };
         let current_version = current.as_ref().map(|summary| summary.payload.version);
-        let decision = decide_import(&package, &self.verifying_key, current_version, now);
+        let Some(verifying_key) = self.verifying_key() else {
+            return Ok(PolicyInspection {
+                accepted: false,
+                reason: "verifying_key_unavailable".into(),
+                current,
+                candidate: Some(PolicySummary {
+                    imported_at: None,
+                    payload: package.payload,
+                }),
+            });
+        };
+        let decision = decide_import(&package, &verifying_key, current_version, now);
         Ok(PolicyInspection {
             accepted: decision == ImportDecision::Accept,
             reason: import_rejection_reason(decision).into(),
@@ -187,7 +228,17 @@ impl Service {
             .active_policy()
             .map_err(|error| DesktopProtocolError::new("store_unavailable", error.to_string()))?
             .map(|package| package.payload.version);
-        let decision = decide_import(&package, &self.verifying_key, current_version, now);
+        let Some(verifying_key) = self.verifying_key() else {
+            self.append_import_rejection(user, now, "verifying_key_unavailable")
+                .map_err(|error| {
+                    DesktopProtocolError::new("store_unavailable", error.to_string())
+                })?;
+            return Ok(ImportResponse {
+                accepted: false,
+                reason: "verifying_key_unavailable".into(),
+            });
+        };
+        let decision = decide_import(&package, &verifying_key, current_version, now);
         self.store
             .import_policy(&package, decision, &self.device_id, user, now)
             .map_err(|error| DesktopProtocolError::new("store_unavailable", error.to_string()))?;
@@ -486,7 +537,16 @@ impl Service {
                 Ok(package) => package.map(|package| package.payload.version),
                 Err(_) => return ImportOutcome::denied("store_unavailable"),
             };
-            let decision = decide_import(&package, &self.verifying_key, current_version, now);
+            let Some(verifying_key) = self.verifying_key() else {
+                if self
+                    .append_import_rejection(user, now, "verifying_key_unavailable")
+                    .is_err()
+                {
+                    return ImportOutcome::denied("audit_write_failed");
+                }
+                return ImportOutcome::denied("verifying_key_unavailable");
+            };
+            let decision = decide_import(&package, &verifying_key, current_version, now);
             if self
                 .store
                 .import_policy(&package, decision, &self.device_id, user, now)

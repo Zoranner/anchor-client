@@ -14,6 +14,12 @@ pub struct ActivePolicyRecord {
     pub imported_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerTrust {
+    pub key_id: String,
+    pub public_key_hex: String,
+}
+
 /// 扫描状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScanStatus {

@@ -13,6 +13,8 @@ pub enum StoreError {
     TimeParse(String),
     #[error("扫描状态无效: {0}")]
     InvalidScanStatus(String),
+    #[error("服务端信任状态无效: {0}")]
+    InvalidServerTrust(String),
     #[error("数据库连接锁已失效")]
     LockPoisoned,
 }

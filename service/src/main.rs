@@ -7,12 +7,15 @@ use std::{
         Arc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anchor_core::EventType;
 #[cfg(windows)]
 use anchor_service::scan_runtime::spawn_active_notify_scan_runtime;
+use anchor_service::{
+    config::ServiceConfig, device_identity::InstallationIdentity, server_runtime::ServerRuntime,
+};
 use anchor_service::{enforce::ObservedDevices, Service};
 use anchor_store::Store;
 use anchor_system::{
@@ -26,8 +29,6 @@ use anchor_system::{
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
-use ed25519_dalek::VerifyingKey;
-use serde::Deserialize;
 
 #[cfg(not(windows))]
 use anyhow::bail;
@@ -62,6 +63,7 @@ const LISTEN_FAILURE_BACKOFF: Duration = Duration::from_secs(1);
 const PIPE_RETRY_BACKOFF: Duration = Duration::from_millis(100);
 /// 设备状态与策略期望的核对周期。观测状态已符合策略的设备不会产生任何处置或审计。
 const ENFORCEMENT_INTERVAL: Duration = Duration::from_secs(2);
+const SERVER_SYNC_INTERVAL: Duration = Duration::from_secs(30);
 #[cfg(windows)]
 const SCAN_STABLE_DELAY: Duration = Duration::from_millis(300);
 
@@ -118,36 +120,9 @@ fn run_windows_enforcement_once(service: &Service, now: chrono::DateTime<Utc>) -
     )
 }
 
-/// 安装程序写入的本地服务配置。
-#[derive(Debug, Deserialize)]
-struct ServiceConfig {
-    database: PathBuf,
-    verifying_key_hex: String,
-    device_id: String,
-}
-
-#[cfg(windows)]
-impl ServiceConfig {
-    fn parse(content: &str) -> Result<Self> {
-        Ok(toml::from_str(content)?)
-    }
-
-    fn load(path: &Path) -> Result<Self> {
-        let content = fs::read_to_string(path)
-            .with_context(|| format!("读取服务配置失败: {}", path.display()))?;
-        Self::parse(&content).with_context(|| format!("解析服务配置失败: {}", path.display()))
-    }
-
-    fn open_service(&self) -> Result<Service> {
-        let bytes = hex::decode(&self.verifying_key_hex).context("管理员公钥不是十六进制")?;
-        let key: [u8; 32] = bytes
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("管理员公钥必须是 32 字节"))?;
-        let verifying_key = VerifyingKey::from_bytes(&key).context("管理员公钥无效")?;
-        let store = Store::open(&self.database)
-            .with_context(|| format!("打开本地审计库失败: {}", self.database.display()))?;
-        Ok(Service::new(store, verifying_key, &self.device_id))
-    }
+struct OpenedService {
+    service: Arc<Service>,
+    server_runtime: Option<Arc<ServerRuntime>>,
 }
 
 fn spawn_pipe_listener<T, F>(
@@ -214,11 +189,70 @@ fn local_desktop_executable() -> Result<PathBuf> {
     desktop_executable(&service_executable)
 }
 
+fn open_service(config: &ServiceConfig) -> Result<OpenedService> {
+    let store = Store::open(&config.database)
+        .with_context(|| format!("打开本地审计库失败: {}", config.database.display()))?;
+    let initial_key = config.legacy_verifying_key()?;
+    let Some(server_url) = config.server_url.clone() else {
+        let verifying_key = initial_key.context("离线模式缺少管理员公钥")?;
+        let device_id = config.device_id.clone().context("离线模式缺少 device_id")?;
+        return Ok(OpenedService {
+            service: Arc::new(Service::new(store, verifying_key, device_id)),
+            server_runtime: None,
+        });
+    };
+
+    let identity = InstallationIdentity::load_or_create(&config.installation_id_path()?)?;
+    let service = Arc::new(Service::with_optional_key(
+        store,
+        initial_key,
+        identity.as_string(),
+    ));
+    let server_runtime = Arc::new(ServerRuntime::new(
+        Arc::clone(&service),
+        server_url,
+        identity,
+        config.device_token_path()?,
+    )?);
+    Ok(OpenedService {
+        service,
+        server_runtime: Some(server_runtime),
+    })
+}
+
+fn spawn_server_sync(
+    runtime: Arc<ServerRuntime>,
+    stop_requested: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        while !stop_requested.load(Ordering::SeqCst) {
+            match runtime.sync_once(Utc::now()) {
+                Ok(report) => {
+                    tracing::debug!(
+                        status = ?report.status,
+                        policy_version = ?report.policy_version,
+                        "server sync completed"
+                    );
+                }
+                Err(error) => {
+                    let reason = format!("{error:#}");
+                    tracing::warn!(%reason, "server sync failed");
+                }
+            }
+            let next_sync = Instant::now() + SERVER_SYNC_INTERVAL;
+            while Instant::now() < next_sync && !stop_requested.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+    })
+}
+
 fn serve_until_stopped<F>(config: ServiceConfig, should_stop: F) -> Result<()>
 where
     F: Fn() -> bool,
 {
-    let service = Arc::new(config.open_service()?);
+    let opened = open_service(&config)?;
+    let service = opened.service;
     service.record_lifecycle_event(
         EventType::ServiceStart,
         "service_start",
@@ -246,6 +280,9 @@ where
     #[cfg(windows)]
     let mut desktop_failure_recorded = false;
     let listener_stop_requested = Arc::new(AtomicBool::new(false));
+    let server_sync = opened
+        .server_runtime
+        .map(|runtime| spawn_server_sync(runtime, Arc::clone(&listener_stop_requested)));
     let control_listener = spawn_pipe_listener(
         Arc::clone(&service),
         Arc::clone(&listener_stop_requested),
@@ -308,6 +345,11 @@ where
     desktop_listener
         .join()
         .map_err(|_| anyhow::anyhow!("桌面端 Named Pipe 监听线程异常退出"))?;
+    if let Some(server_sync) = server_sync {
+        server_sync
+            .join()
+            .map_err(|_| anyhow::anyhow!("服务端同步线程异常退出"))?;
+    }
     Ok(())
 }
 
@@ -620,8 +662,8 @@ device_id = "laptop-1"
         )
         .unwrap();
 
-        assert_eq!(config.device_id, "laptop-1");
-        assert_eq!(config.verifying_key_hex.len(), 64);
+        assert_eq!(config.device_id.as_deref(), Some("laptop-1"));
+        assert_eq!(config.verifying_key_hex.as_deref().map(str::len), Some(64));
     }
 
     #[cfg(windows)]
