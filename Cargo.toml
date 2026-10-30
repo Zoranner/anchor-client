@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["crates/shared"]
 members = [
     "crates/anchor-ipc",
     "crates/anchor-scan",
@@ -26,8 +27,8 @@ license = "Proprietary"
 
 [workspace.dependencies]
 # 仓库根共享 crate
-anchor-core = { path = "../crates/anchor-core" }
-anchor-protocol = { path = "../crates/anchor-protocol" }
+anchor-core = { path = "crates/shared/anchor-core" }
+anchor-protocol = { path = "crates/shared/anchor-protocol" }
 
 # 客户端专用 crate
 anchor-ipc = { path = "crates/anchor-ipc" }

@@ -1,0 +1,158 @@
+name: Release Anchor Client
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: anchor-client-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify Client
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+          components: rustfmt, clippy
+
+      - name: Verify client Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo test --workspace --all-targets --all-features
+
+  verify-desktop:
+    name: Verify Desktop
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+          components: rustfmt, clippy
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        shell: bash
+        run: bun install --frozen-lockfile
+
+      - name: Verify frontend
+        working-directory: desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun run typecheck
+          bun run lint
+          bun run format:check
+          bun test
+
+      - name: Verify desktop Rust
+        working-directory: desktop/src-tauri
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --all-targets --all-features
+
+  prepare:
+    name: Prepare Release
+    needs: [verify, verify-desktop]
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - id: version
+        name: Validate release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          [[ "$tag_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          client_version="$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)"
+          package_version="$(jq -r '.version' desktop/package.json)"
+          native_version="$(awk -F '"' '/^version = / { print $2; exit }' desktop/src-tauri/Cargo.toml)"
+          tauri_version="$(jq -r '.version' desktop/src-tauri/tauri.conf.json)"
+          test "$tag_version" = "$client_version"
+          test "$tag_version" = "$package_version"
+          test "$tag_version" = "$native_version"
+          test "$tag_version" = "$tauri_version"
+          echo "version=$tag_version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build Windows Release
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & "$env:USERPROFILE\.dotnet\tools\wix.exe" extension add -g WixToolset.UI.wixext/5.0.2
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Build and package Windows release
+        shell: bash
+        run: cargo run --release --locked -p anchor-build -- release
+
+      - name: Upload Windows release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: anchor-client-release
+          path: release/
+          if-no-files-found: error
+
+  publish:
+    name: Publish Release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: anchor-client-release
+          path: release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: Anchor Client ${{ needs.prepare.outputs.version }}
+          body: |
+            Windows package: runtime MSI with desktop client.
+          files: |
+            release/*.msi
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          generate_release_notes: true
