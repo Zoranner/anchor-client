@@ -27,8 +27,8 @@ license = "Proprietary"
 
 [workspace.dependencies]
 # 仓库根共享 crate
-anchor-core = { path = "crates/shared/anchor-core" }
-anchor-protocol = { path = "crates/shared/anchor-protocol" }
+anchor-core = { path = "crates/shared/core" }
+anchor-protocol = { path = "crates/shared/protocol" }
 
 # 客户端专用 crate
 anchor-ipc = { path = "crates/anchor-ipc" }
