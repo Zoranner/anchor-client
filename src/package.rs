@@ -9,7 +9,7 @@ pub fn package() -> Result<()> {
         bail!("Windows 安装包只能在 Windows 上构建");
     }
 
-    let root = client_root();
+    let root = client_root()?;
     let version = env!("CARGO_PKG_VERSION").to_owned();
     let binaries = root.join("target/release");
     let installer = root.join("installer/AnchorGuard.wxs");
@@ -40,7 +40,7 @@ pub fn package() -> Result<()> {
         .with_context(|| format!("创建发布目录失败: {}", output.display()))?;
 
     let mut wix = Command::new("wix");
-    wix.current_dir(root)
+    wix.current_dir(&root)
         .arg("build")
         .args(["-ext", "WixToolset.UI.wixext"])
         .arg(&installer)

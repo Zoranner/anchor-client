@@ -1,9 +1,27 @@
-use std::{path::Path, process::Command};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::{bail, Context, Result};
 
-pub fn client_root() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+pub fn client_root() -> Result<PathBuf> {
+    let mut directory = env::current_dir().context("读取当前目录失败")?;
+    loop {
+        if is_client_root(&directory) {
+            return Ok(directory);
+        }
+        if !directory.pop() {
+            bail!("无法定位客户端仓库根目录");
+        }
+    }
+}
+
+fn is_client_root(directory: &Path) -> bool {
+    directory.join("Cargo.toml").is_file()
+        && directory.join("desktop").is_dir()
+        && directory.join("installer").is_dir()
 }
 
 pub fn run(command: &mut Command) -> Result<()> {
