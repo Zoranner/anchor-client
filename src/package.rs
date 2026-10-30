@@ -1,26 +1,8 @@
-use std::{env, fs, path::Path, process::Command};
+use std::{fs, path::Path, process::Command};
 
 use anyhow::{bail, Context, Result};
-use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use crate::command::{client_root, run};
-
-const TARGET: &str = "windows-x64";
-
-#[derive(Serialize)]
-struct ManifestArtifact {
-    name: String,
-    sha256: String,
-}
-
-#[derive(Serialize)]
-struct Manifest {
-    version: String,
-    revision: String,
-    target: &'static str,
-    artifacts: Vec<ManifestArtifact>,
-}
 
 pub fn package() -> Result<()> {
     if !cfg!(windows) {
@@ -34,8 +16,6 @@ pub fn package() -> Result<()> {
     let desktop_binary = root.join("desktop/src-tauri/target/release/anchor-guard.exe");
     let output = root.join("release");
     let msi = output.join(format!("anchor-guard-v{version}-windows-x64.msi"));
-    let manifest_path = output.join("manifest.json");
-    let checksums_path = output.join("SHA256SUMS");
 
     ensure_file("安装器定义", &installer)?;
     ensure_file("桌面端程序", &desktop_binary)?;
@@ -51,10 +31,8 @@ pub fn package() -> Result<()> {
         ensure_file(label, &binaries.join(name))?;
     }
 
-    for path in [&msi, &manifest_path, &checksums_path] {
-        if path.exists() {
-            bail!("发布文件已存在，请先移除: {}", path.display());
-        }
+    if msi.exists() {
+        bail!("发布文件已存在，请先移除: {}", msi.display());
     }
 
     ensure_wix()?;
@@ -91,27 +69,7 @@ pub fn package() -> Result<()> {
             .with_context(|| format!("删除 WiX 调试文件失败: {}", wixpdb.display()))?;
     }
 
-    let msi_bytes = fs::read(&msi).with_context(|| format!("读取安装包失败: {}", msi.display()))?;
-    let sha256 = hex::encode(Sha256::digest(&msi_bytes));
-    let artifact_name = msi
-        .file_name()
-        .and_then(|name| name.to_str())
-        .context("安装包文件名不是有效 UTF-8")?
-        .to_owned();
-    let manifest = Manifest {
-        version,
-        revision: revision(root),
-        target: TARGET,
-        artifacts: vec![ManifestArtifact {
-            name: artifact_name.clone(),
-            sha256: sha256.clone(),
-        }],
-    };
-    let manifest_json = serde_json::to_string_pretty(&manifest).context("序列化发布清单失败")?;
-    fs::write(&manifest_path, format!("{manifest_json}\n"))
-        .with_context(|| format!("写入发布清单失败: {}", manifest_path.display()))?;
-    fs::write(&checksums_path, format!("{sha256}  {artifact_name}\n"))
-        .with_context(|| format!("写入校验文件失败: {}", checksums_path.display()))?;
+    ensure_file("安装包", &msi)?;
 
     eprintln!("发布物已生成: {}", output.display());
     Ok(())
@@ -134,22 +92,4 @@ fn ensure_wix() -> Result<()> {
         bail!("未找到 WiX 5，可执行 wix --version 检查 PATH");
     }
     Ok(())
-}
-
-fn revision(root: &Path) -> String {
-    if let Ok(value) = env::var("GITHUB_SHA") {
-        if !value.is_empty() {
-            return value;
-        }
-    }
-    Command::new("git")
-        .current_dir(root)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "unknown".to_owned())
 }

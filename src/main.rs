@@ -14,7 +14,7 @@ Anchor Guard 客户端构建与打包
 
 命令:
   build     构建 Rust workspace 和桌面端
-  package   用已构建的程序生成 MSI、manifest.json 和 SHA256SUMS
+  package   用已构建的程序生成 MSI
   release   依次执行 build 和 package（默认）
 ";
 
